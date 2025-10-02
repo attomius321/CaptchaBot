@@ -38,9 +38,9 @@ const CONFIG = {
     sliderSelector: ".cf-slide__canvas",
     handleSelector: ".cf-slider__button",
   },
-  color: {
-    target: { r: 86, g: 172, b: 238 },
-    tolerance: 8,
+  anomaly: {
+    whiteThreshold: 250, // Pixels with any channel below this are considered anomalies
+    offsetPixels: 30, // Subtract this many pixels from the anomaly X position when dragging
   },
   timing: {
     initialPageLoad: [1500, 3000],
@@ -86,10 +86,10 @@ const CONFIG = {
 };
 
 // ============================================================================
-// COLOR DETECTION
+// ANOMALY DETECTION
 // ============================================================================
 
-class ColorDetector {
+class AnomalyDetector {
   constructor(whiteThreshold = 250) {
     // Threshold for what we consider "white" (pixels above this are ignored)
     this.whiteThreshold = whiteThreshold;
@@ -105,13 +105,17 @@ class ColorDetector {
     );
   }
 
-  async findPixel(buffer) {
+  async findFirstAnomaly(buffer) {
     const image = sharp(buffer);
     const { data, info } = await image
       .raw()
       .toBuffer({ resolveWithObject: true });
 
     const channels = info.channels;
+
+    console.log(
+      `→ Scanning ${info.width}x${info.height} image from right to left...`
+    );
 
     // Scan from right to left
     for (let x = info.width - 1; x >= 0; x--) {
@@ -123,7 +127,7 @@ class ColorDetector {
 
         if (this.isAnomaly(r, g, b)) {
           console.log(
-            `  First anomaly found at (${x}, ${y}) - RGB(${r}, ${g}, ${b})`
+            `✓ First anomaly found at (${x}, ${y}) - RGB(${r}, ${g}, ${b})`
           );
           return { x, y, r, g, b, info };
         }
@@ -574,32 +578,21 @@ class CaptchaSolver {
     this.browser = null;
     this.page = null;
     this.mouse = null;
-    this.colorDetector = new ColorDetector(
-      CONFIG.color.target,
-      CONFIG.color.tolerance
-    );
+    this.anomalyDetector = new AnomalyDetector(CONFIG.anomaly.whiteThreshold);
   }
 
   async initialize() {
-    // Connect to existing Chrome instance instead of launching new one
-    // First, start Chrome with remote debugging:
-    // macOS: /Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --remote-debugging-port=9222
-    // Windows: chrome.exe --remote-debugging-port=9222
-    // Linux: google-chrome --remote-debugging-port=9222
-
     const browserURL = "http://127.0.0.1:9222";
 
     console.log("→ Attempting to connect to Chrome on", browserURL);
 
     try {
-      // Test if the debugging port is accessible
       const response = await fetch(`${browserURL}/json/version`);
       const data = await response.json();
       console.log("✓ Chrome debugging port is accessible");
       console.log(`  Browser: ${data.Browser}`);
       console.log(`  Protocol: ${data["Protocol-Version"]}`);
 
-      // Connect to the browser
       this.browser = await puppeteer.connect({
         browserURL,
         defaultViewport: null,
@@ -607,11 +600,9 @@ class CaptchaSolver {
 
       console.log("✓ Connected to Chrome successfully");
 
-      // Get all open pages
       const pages = await this.browser.pages();
       console.log(`✓ Found ${pages.length} open tab(s)`);
 
-      // Use the first tab (or create one if none exist)
       if (pages.length > 0) {
         this.page = pages[0];
         console.log("✓ Using first open tab");
@@ -649,7 +640,6 @@ class CaptchaSolver {
       throw new Error("Chrome remote debugging not available");
     }
 
-    // Set viewport to match MacBook M1 13"
     await this.page.setViewport({
       width: 1440,
       height: 900,
@@ -663,10 +653,6 @@ class CaptchaSolver {
   async explorePageNaturally() {
     console.log("→ Exploring page naturally...");
 
-    // Shorter, more natural exploration
-    // await delay(rand(800, 1500));
-
-    // Gentle scroll
     const scrollAmount = randInt(30, 80);
     await this.page.evaluate((amount) => {
       window.scrollBy({
@@ -675,28 +661,17 @@ class CaptchaSolver {
       });
     }, scrollAmount);
 
-    // await delay(rand(400, 800));
-
-    // Small mouse movements (not too much)
     const explorationMoves = randInt(2, 3);
     await this.mouse.randomWander(explorationMoves);
-
-    // Brief pause
-    // await delay(rand(500, 1000));
   }
 
   async navigateToTarget() {
-    await this.page.goto(CONFIG.target.url, {
-      waitUntil: "domcontentloaded",
-      timeout: 30000,
-    });
+    // await this.page.goto(CONFIG.target.url, {
+    //   waitUntil: "domcontentloaded",
+    //   timeout: 30000,
+    // });
 
     console.log("→ Page loaded, acting naturally...");
-
-    // Wait for page to settle
-    // await delay(rand(1000, 1800));
-
-    // Light exploration (less is more)
     await this.explorePageNaturally();
   }
 
@@ -712,14 +687,12 @@ class CaptchaSolver {
       y: btnBox.y + btnBox.height / 2 + rand(-2, 2),
     };
 
-    // Natural approach with multiple phases
     const distance = Math.hypot(
       btnCenter.x - this.mouse.position.x,
       btnCenter.y - this.mouse.position.y
     );
 
     if (distance > 150) {
-      // First move to general area
       const intermediateAngle = Math.atan2(
         btnCenter.y - this.mouse.position.y,
         btnCenter.x - this.mouse.position.x
@@ -743,7 +716,6 @@ class CaptchaSolver {
       await delay(rand(100, 250));
     }
 
-    // Move near the button
     const nearButton = {
       x: btnCenter.x + rand(-30, 30),
       y: btnCenter.y + rand(-30, 30),
@@ -755,7 +727,6 @@ class CaptchaSolver {
     });
     await delay(rand(150, 350));
 
-    // Final precise move to button
     await this.mouse.moveTo(btnCenter, {
       overshoot: true,
       duration: rand(400, 700),
@@ -771,18 +742,14 @@ class CaptchaSolver {
     await this.mouse.microDrift();
   }
 
-  // Update the solveSliderChallenge method in your CaptchaSolver class:
-
   async solveSliderChallenge() {
     const slider = await this.page.waitForSelector(
       CONFIG.target.sliderSelector,
       { visible: true, timeout: 10000 }
     );
 
-    // Look at the challenge (reading/analyzing)
     await delay(rand(...CONFIG.timing.observationPause));
 
-    // Move mouse to examine the challenge
     const sliderBox = await slider.boundingBox();
     const examinePoint = {
       x: sliderBox.x + sliderBox.width * rand(0.3, 0.7),
@@ -794,43 +761,31 @@ class CaptchaSolver {
     });
     await delay(rand(300, 600));
 
-    // Take screenshot and trim 40px from left
+    // Take screenshot (no trimming needed)
     const screenshotBuffer = await slider.screenshot();
+    await sharp(screenshotBuffer).toFile("slider-original.png");
+    console.log("✓ Screenshot saved as slider-original.png");
 
-    // Get metadata for trimming
-    const metadata = await sharp(screenshotBuffer).metadata();
-
-    // Trim 40px from the left side
-    const trimmedBuffer = await sharp(screenshotBuffer)
-      .extract({
-        left: 0, // Start 40px from left
-        top: 0, // Start from top
-        width: metadata.width, // Remaining width
-        height: metadata.height, // Full height
-      })
-      .toBuffer();
-
-    // Save the trimmed screenshot
-    await sharp(trimmedBuffer).toFile("slider-trimmed.png");
-    console.log("✓ Trimmed screenshot saved as slider-trimmed.png");
-
-    const found = await this.colorDetector.findPixel(trimmedBuffer);
+    // Find first anomaly from right to left
+    const found = await this.anomalyDetector.findFirstAnomaly(screenshotBuffer);
 
     if (!found) {
-      throw new Error(
-        `Target color RGB(${CONFIG.color.target.r}, ${CONFIG.color.target.g}, ${CONFIG.color.target.b}) not found`
-      );
+      throw new Error("No anomaly found in the slider image");
     }
 
-    console.log(`✓ Target color found at (${found.x}, ${found.y})`);
+    // Calculate target position with offset
+    const scaleX = sliderBox.width / found.info.width;
+    const anomalyPageX = sliderBox.x + found.x * scaleX;
+    const offsetPageX = CONFIG.anomaly.offsetPixels * scaleX;
+    const targetPageX = anomalyPageX - offsetPageX;
 
-    // Adjust the scale and position calculation to account for the 40px trim
-    const trimmedWidth = found.info.width;
-    const originalWidth = sliderBox.width;
-    const scaleX = originalWidth / (trimmedWidth + 40); // Account for trimmed area
-
-    // Add back the 40px offset when calculating target position
-    const targetPageX = sliderBox.x + (found.x + 40) * scaleX;
+    console.log(`→ Anomaly X position: ${anomalyPageX.toFixed(2)}px`);
+    console.log(
+      `→ Offset: ${offsetPageX.toFixed(2)}px (${
+        CONFIG.anomaly.offsetPixels
+      } pixels)`
+    );
+    console.log(`→ Final target X: ${targetPageX.toFixed(2)}px`);
 
     const handle = await this.page.waitForSelector(
       CONFIG.target.handleSelector,
@@ -865,10 +820,9 @@ class CaptchaSolver {
       throw err;
     } finally {
       await delay(100);
-      // Don't close the browser since we're using an existing instance
       if (this.page) {
         console.log("→ Script complete. Browser remains open.");
-        await this.page.reload();
+        // await this.page.reload();
       }
     }
   }
@@ -877,8 +831,6 @@ class CaptchaSolver {
 // ============================================================================
 // MAIN EXECUTION
 // ============================================================================
-
-const retries = 10;
 
 (async () => {
   const solver = new CaptchaSolver();
